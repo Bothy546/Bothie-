@@ -25,11 +25,14 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Generate missing platform files
+        run: flutter create . --platforms=android
+
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build lightweight APK (arm64 only)
-        run: flutter build apk --release --target-platform android-arm64 --split-per-abi --shrink
+        run: flutter build apk --release --target-platform android-arm64 --split-per-abi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
