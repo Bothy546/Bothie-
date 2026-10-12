@@ -7,6 +7,17 @@ class PredictionService {
 
   static Map<String, Map<String, dynamic>>? _catalog;
 
+  static const List<String> allowedLeagues = [
+    "premier league",
+    "la liga",
+    "serie a",
+    "bundesliga",
+    "ligue 1",
+    "champions league",
+    "europa league",
+    "conference league",
+  ];
+
   static Future<void> _loadCatalog() async {
     if (_catalog != null) return;
     final url = Uri.parse("$baseUrl/markets?apiKey=$apiKey&sportId=10");
@@ -44,6 +55,12 @@ class PredictionService {
     }
 
     List fixtures = jsonDecode(fixturesRes.body);
+
+    fixtures = fixtures.where((fx) {
+      final tournament = (fx['tournamentName'] ?? '').toString().toLowerCase();
+      return allowedLeagues.any((league) => tournament.contains(league));
+    }).toList();
+
     fixtures = fixtures.take(5).toList();
 
     List<Map<String, dynamic>> results = [];
@@ -71,7 +88,6 @@ class PredictionService {
       final bookmakerOdds = oddsData['bookmakerOdds'] as Map<String, dynamic>?;
       if (bookmakerOdds == null || bookmakerOdds.isEmpty) return null;
 
-      // Merge markets across all bookmakers (first valid price wins per outcome)
       Map<String, dynamic> mergedMarkets = {};
       for (var bk in bookmakerOdds.values) {
         final markets = bk['markets'] as Map<String, dynamic>?;
