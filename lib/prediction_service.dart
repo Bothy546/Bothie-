@@ -1,94 +1,62 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-
 class PredictionService {
-  static const String apiKey = "e0386235-ab5d-4380-9b1e-869de068429a";
-  static const String baseUrl = "https://api.oddspapi.io/v1";
-
+  // 🔧 MOCK MODE — no API calls, just test data
   static Future<List<Map<String, dynamic>>> getMatches() async {
-    final today = DateTime.now();
-    final tomorrow = today.add(const Duration(days: 1));
+    await Future.delayed(const Duration(seconds: 1)); // simulate loading
 
-    final url = Uri.parse(
-      "$baseUrl/fixtures?sport=football&from=${_fmt(today)}&to=${_fmt(tomorrow)}&apikey=$apiKey",
-    );
+    final mockMatches = [
+      {
+        "home": "Arsenal",
+        "away": "Chelsea",
+        "predictions": [
+          {"label": "BTTS: Yes", "confidence": 85.0},
+          {"label": "Goals: Over 2.5", "confidence": 80.0},
+          {"label": "Match Result: Home Win", "confidence": 72.0},
+          {"label": "First Half Result: Draw", "confidence": 65.0},
+        ],
+      },
+      {
+        "home": "Man City",
+        "away": "Liverpool",
+        "predictions": [
+          {"label": "Match Result: Home Win", "confidence": 78.0},
+          {"label": "BTTS: Yes", "confidence": 74.0},
+          {"label": "Goals: Over 2.5", "confidence": 70.0},
+          {"label": "First Half Result: Home Lead", "confidence": 60.0},
+        ],
+      },
+      {
+        "home": "Real Madrid",
+        "away": "Barcelona",
+        "predictions": [
+          {"label": "BTTS: Yes", "confidence": 90.0},
+          {"label": "Goals: Over 2.5", "confidence": 88.0},
+          {"label": "Match Result: Draw", "confidence": 55.0},
+          {"label": "First Half Result: Draw", "confidence": 50.0},
+        ],
+      },
+      {
+        "home": "PSG",
+        "away": "Marseille",
+        "predictions": [
+          {"label": "Match Result: Home Win", "confidence": 60.0},
+          {"label": "Goals: Under 2.5", "confidence": 58.0},
+          {"label": "BTTS: No", "confidence": 55.0},
+          {"label": "First Half Result: Draw", "confidence": 48.0},
+        ],
+      },
+    ];
 
-    final response = await http.get(url);
-    if (response.statusCode != 200) return [];
-
-    final data = jsonDecode(response.body);
-    List fixtures = data['fixtures'] ?? [];
-
-    List<Map<String, dynamic>> results = [];
-
-    for (var match in fixtures) {
-      final predictions = _calculatePredictions(match);
-      final safety = _calculateSafety(predictions);
-
-      results.add({
-        "home": match['home_team'],
-        "away": match['away_team'],
-        "time": match['start_time'],
-        "predictions": predictions,
-        "safety": safety,
-      });
+    // Calculate safety score (average of its predictions)
+    for (var match in mockMatches) {
+      final preds = match['predictions'] as List<Map<String, dynamic>>;
+      final avg = preds.map((p) => p['confidence'] as double).reduce((a, b) => a + b) / preds.length;
+      match['safety'] = avg;
     }
 
-    // Sort by safety (safest first)
-    results.sort((a, b) => b['safety'].compareTo(a['safety']));
-    return results;
-  }
+    // Sort safest first
+    mockMatches.sort((a, b) => (b['safety'] as double).compareTo(a['safety'] as double));
 
-  static String _fmt(DateTime d) =>
-      "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
-
-  static List<Map<String, dynamic>> _calculatePredictions(match) {
-    List<Map<String, dynamic>> markets = [];
-    final odds = match['odds'] ?? {};
-
-    void addMarket(String label, double? price) {
-      if (price != null && price > 1.0) {
-        double confidence = (1 / price) * 100;
-        markets.add({"label": label, "confidence": confidence});
-      }
-    }
-
-    addMarket("Match Result: Home Win", odds['home_win']);
-    addMarket("Match Result: Draw", odds['draw']);
-    addMarket("Match Result: Away Win", odds['away_win']);
-    addMarket("BTTS: Yes", odds['btts_yes']);
-    addMarket("BTTS: No", odds['btts_no']);
-    addMarket("Over 2.5 Goals", odds['over_2_5']);
-    addMarket("Under 2.5 Goals", odds['under_2_5']);
-    addMarket("First Half Result: Home Lead", odds['ht_home']);
-    addMarket("First Half Result: Draw", odds['ht_draw']);
-    addMarket("First Half Result: Away Lead", odds['ht_away']);
-
-    markets.sort((a, b) => b['confidence'].compareTo(a['confidence']));
-
-    // Remove conflicting markets, keep top 4
-    List<Map<String, dynamic>> finalPicks = [];
-    Set<String> usedGroups = {};
-
-    for (var m in markets) {
-      String group = m['label'].toString().split(":")[0];
-      if (!usedGroups.contains(group)) {
-        finalPicks.add(m);
-        usedGroups.add(group);
-      }
-      if (finalPicks.length == 4) break;
-    }
-
-    return finalPicks;
-  }
-
-  static double _calculateSafety(List<Map<String, dynamic>> predictions) {
-    if (predictions.isEmpty) return 0;
-    double total = 0;
-    for (var p in predictions) {
-      total += p['confidence'];
-    }
-    return total / predictions.length;
+    return mockMatches;
   }
 
 }
