@@ -26,7 +26,7 @@ jobs:
           cache: true
 
       - name: Generate missing platform files
-        run: flutter create . --platforms=android
+        run: flutter create . --platforms=android --project-name bothie_predictions --org com.bothie
 
       - name: Install dependencies
         run: flutter pub get
