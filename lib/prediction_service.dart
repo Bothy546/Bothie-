@@ -5,7 +5,33 @@ class PredictionService {
   static const String apiKey = "1a53deaf-aa03-404f-935a-a2a2c3e99211";
   static const String baseUrl = "https://api.oddspapi.io/v4";
 
+  static Map<String, Map<String, dynamic>>? _catalog;
+
+  static Future<void> _loadCatalog() async {
+    if (_catalog != null) return;
+    final url = Uri.parse("$baseUrl/markets?apiKey=$apiKey&sportId=10");
+    final res = await http.get(url).timeout(const Duration(seconds: 10));
+    if (res.statusCode != 200) { _catalog = {}; return; }
+    final List list = jsonDecode(res.body);
+    final map = <String, Map<String, dynamic>>{};
+    for (var m in list) {
+      final outcomes = <String, String>{};
+      for (var o in (m['outcomes'] as List)) {
+        outcomes[o['outcomeId'].toString()] = o['outcomeName'].toString();
+      }
+      map[m['marketId'].toString()] = {
+        'name': (m['marketName'] ?? '').toString(),
+        'type': (m['marketType'] ?? '').toString(),
+        'handicap': m['handicap'],
+        'period': (m['period'] ?? '').toString(),
+        'outcomes': outcomes,
+      };
+    }
+    _catalog = map;
+  }
+
   static Future<List<Map<String, dynamic>>> getMatches() async {
+    await _loadCatalog();
     final today = DateTime.now();
     final tomorrow = today.add(const Duration(days: 1));
 
@@ -14,15 +40,13 @@ class PredictionService {
     );
     final fixturesRes = await http.get(fixturesUrl).timeout(const Duration(seconds: 10));
     if (fixturesRes.statusCode != 200) {
-      throw Exception("Fixtures error: ${fixturesRes.statusCode} - ${fixturesRes.body}");
+      throw Exception("Fixtures error: ${fixturesRes.statusCode}");
     }
 
     List fixtures = jsonDecode(fixturesRes.body);
-    fixtures = fixtures.take(5).toList(); // lowered to 5 for free tier safety
+    fixtures = fixtures.take(5).toList();
 
     List<Map<String, dynamic>> results = [];
-
-    // Fetch ONE at a time, with a short delay (avoids free-tier rate limiting)
     for (var fx in fixtures) {
       final match = await _fetchMatchOdds(fx);
       if (match != null) results.add(match);
@@ -47,23 +71,24 @@ class PredictionService {
       final bookmakerOdds = oddsData['bookmakerOdds'] as Map<String, dynamic>?;
       if (bookmakerOdds == null || bookmakerOdds.isEmpty) return null;
 
-      final firstBookie = bookmakerOdds.values.first;
-      final markets = firstBookie['markets'] as Map<String, dynamic>?;
-      if (markets == null) return null;
+      // Merge markets across all bookmakers (first valid price wins per outcome)
+      Map<String, dynamic> mergedMarkets = {};
+      for (var bk in bookmakerOdds.values) {
+        final markets = bk['markets'] as Map<String, dynamic>?;
+        if (markets == null) continue;
+        markets.forEach((mid, mdata) {
+          mergedMarkets.putIfAbsent(mid, () => mdata);
+        });
+      }
 
-      final predictions = _extractPredictions(markets);
+      final predictions = _extractPredictions(mergedMarkets);
       if (predictions.isEmpty) return null;
 
       predictions.sort((a, b) => b['confidence'].compareTo(a['confidence']));
       final top4 = predictions.take(4).toList();
       final safety = top4.map((p) => p['confidence'] as double).reduce((a, b) => a + b) / top4.length;
 
-      return {
-        "home": home,
-        "away": away,
-        "predictions": top4,
-        "safety": safety,
-      };
+      return {"home": home, "away": away, "predictions": top4, "safety": safety};
     } catch (e) {
       return null;
     }
@@ -73,40 +98,55 @@ class PredictionService {
       "${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}";
 
   static List<Map<String, dynamic>> _extractPredictions(Map<String, dynamic> markets) {
+    final catalog = _catalog ?? {};
     List<Map<String, dynamic>> picks = [];
 
-    void tryMarket(String marketId, String marketLabel, Map<String, String> outcomeLabels) {
-      final market = markets[marketId];
-      if (market == null) return;
-      final outcomes = market['outcomes'] as Map<String, dynamic>?;
-      if (outcomes == null) return;
+    markets.forEach((marketId, marketData) {
+      final info = catalog[marketId];
+      if (info == null) return;
+      final name = (info['name'] as String).toLowerCase();
+      final period = (info['period'] as String).toLowerCase();
+      final handicap = info['handicap'];
+      final outcomesMeta = info['outcomes'] as Map<String, String>;
 
+      String? group;
+      if (name.contains("full time result") && period.contains("full")) {
+        group = "Match Result";
+      } else if (name.contains("both teams to score") && period.contains("full")) {
+        group = "BTTS";
+      } else if (name.contains("total") && period.contains("full") &&
+          (handicap == 1.5 || handicap == 2.5)) {
+        group = "Goals O/U $handicap";
+      } else if ((name.contains("half") && name.contains("result")) ||
+          (name.contains("full time result") && period.contains("half"))) {
+        group = "First Half Result";
+      }
+      if (group == null) return;
+
+      final outcomes = marketData['outcomes'] as Map<String, dynamic>?;
+      if (outcomes == null) return;
       outcomes.forEach((outcomeId, outcome) {
         final players = outcome['players'] as Map<String, dynamic>?;
         final price = players?['0']?['price'];
         if (price != null && price is num && price > 1.0) {
-          final label = outcomeLabels[outcomeId] ?? outcomeId;
+          final outcomeName = outcomesMeta[outcomeId] ?? outcomeId;
           picks.add({
-            "label": "$marketLabel: $label",
+            "label": "$group: $outcomeName",
             "confidence": (1 / price) * 100,
-            "marketId": marketId,
+            "group": group,
           });
         }
       });
-    }
+    });
 
-    tryMarket("101", "Match Result", {"101": "Home Win", "102": "Draw", "103": "Away Win"});
-    tryMarket("104", "BTTS", {"104": "Yes", "105": "No"});
-    tryMarket("106", "Goals", {"106": "Over", "107": "Under"});
-
-    final Map<String, Map<String, dynamic>> bestPerMarket = {};
+    final Map<String, Map<String, dynamic>> best = {};
     for (var p in picks) {
-      final mId = p['marketId'];
-      if (!bestPerMarket.containsKey(mId) || p['confidence'] > bestPerMarket[mId]!['confidence']) {
-        bestPerMarket[mId] = p;
+      final g = p['group'];
+      if (!best.containsKey(g) || p['confidence'] > best[g]!['confidence']) {
+        best[g] = p;
       }
     }
-    return bestPerMarket.values.toList();
+    return best.values.toList();
   }
 
 }
